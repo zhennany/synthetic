@@ -5,3 +5,5 @@
 3. call blend_yale.py to generate class 1 samples from *P00A+000E+00.pgm images; class 0 samples include lighting changes
 
 4. call preprocess_data.py to remove black boundaries from blending.
+
+Note: need dlib and [imutils](https://github.com/jrosebr1/imutils)
