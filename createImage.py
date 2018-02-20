@@ -73,6 +73,12 @@ class Triangle(Shape):
         self.size = size
         self.center = center
         
+class Triangle2(Shape):
+    def __init__(self, center=[0,0], size=0, angle=0):
+        self.name = 'Triangle'
+        self.size = size
+        self.center = center
+        self.angle = angle
     
 class Rectangle(Shape):
     def __init__(self, center=[0,0], size=0):
@@ -104,6 +110,11 @@ class Hexagram(Shape):
         self.size = size
         self.center = center
         
+class Diamond(Shape):
+    def __init__(self, center=[0,0], size=0):
+        self.name = 'Diamond'
+        self.size = size
+        self.center = center
         
 class Symmetry(Shape):
     def __init__(self, center=[0,0], size=0):
@@ -188,6 +199,40 @@ def drawRectangule(im, components, center, size, fill, rotate=True, rescale=Fals
     draw.polygon(vertices, fill=fill)
     
     obj.size = np.ceil(np.sqrt(w**2+h**2)) # update obj size
+    
+    return obj
+    
+def drawDiamond(im, components, center, size, fill, rotate=True, rescale=False):
+    obj = Diamond(center, size)
+    for other in components:
+        if obj.overlap(other):
+            return None
+    draw = ImageDraw.Draw(im)
+    vertices = []
+    
+    if rescale:
+        w = nprandom.randint(size/2, size)
+        h = nprandom.randint(size/2, size)
+    else:
+        w = size
+        h = size
+    x0 = center[0]-w/2
+    x1 = x0 + w
+    y0 = center[1]-h/2
+    y1 = y0 + h
+    
+    vertices = [(x0, center[1]), (center[0],y1), (x1,center[1]), (center[0],y0)]
+    
+    ## rotate
+    if rotate:
+        angle = nprandom.uniform(-math.pi/10., math.pi/10.)
+        R = np.asarray([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+        newV = np.dot(np.asarray(vertices)-center, R.T) + center
+        vertices = newV.flatten().tolist()
+        
+    draw.polygon(vertices, fill=fill)
+    
+    obj.size = np.sqrt(w**2+h**2) # update obj size
     
     return obj
     
@@ -2626,3 +2671,907 @@ def generate_challenge_5_newSize(rpath, size=[200,200], nsample=2000, rotate=Fal
     packImages(subpath, os.path.join(rpath, subset+'.data'))
     np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
     
+'''
+ draw targeting/swarm patterns
+'''
+## compute angle between two vectors (0~pi)
+def computeAngle(center, focus):
+    v1 = np.array([0.0, -1.0])
+    v2 = np.array(focus)-np.array(center)
+    dist = np.sqrt(np.dot(v2,v2))
+    angle = math.acos(np.dot(v1,v2)/(dist))
+    if center[0] > focus[0]: ## center is on right side
+        angle = -angle # rotate anti-clockwise
+    return angle
+    
+def drawTriangle2(im, components, center, size, fill, focus, negative=False, partial=None, away=None, rotate=None, turn=False, otherfixed=False):
+    obj = Triangle2(center, size)
+    for other in components:
+        if obj.overlap(other):
+            return None
+    draw = ImageDraw.Draw(im)
+    vertices = []
+    radius = size/2.
+    
+    vertices.append((center[0], center[1]-radius))
+    vertices.append((center[0]+radius * math.cos(4*math.pi /3.), center[1]-radius * math.sin(4*math.pi /3.)))
+    vertices.append((center[0]+radius * math.cos(-math.pi /3.), center[1]-radius * math.sin(-math.pi /3.)))
+    ## rotate
+    angle = computeAngle(center, focus)
+    
+    
+    if negative:
+        if not turn:
+            if partial is None:
+                if away is None:
+                    if rotate is None:
+                        if otherfixed:
+                            pass
+                        else:
+                            ## every object turns around randomly
+                            # angle += nprandom.uniform(math.pi/3., 5*math.pi/3.)
+                            angle += nprandom.uniform(0, 2*math.pi)
+                    else:
+                        ## every object turns around with same angle
+                        assert rotate%360 != 0
+                        angle += math.pi*rotate/180.0
+                else:
+                    assert away > 0
+                    if dist > away: ## only far-away objects turn around randomly
+                        angle += nprandom.uniform(math.pi/3., 5*math.pi/3.)
+                    else:
+                        if nprandom.rand() < 0.2:
+                            if nprandom.rand() < 0.5:
+                                angle += nprandom.uniform(0, math.pi/6)
+                            else:
+                                angle -= nprandom.uniform(0, math.pi/6)
+            else: ## only partial (ratio 0~1) objects turn around randomly
+                assert partial > 0
+                if partial < 0.1:
+                    print('Warning: only no more than %f%% objects turn around?\n'%(partial*100))
+                if nprandom.rand() < partial:
+                    angle += nprandom.uniform(math.pi/3., 5*math.pi/3.) #used (0, 2*math.pi) on 9/28 4:16pm
+        else:
+            angle += nprandom.uniform(math.pi/3., 5*math.pi/3.)
+    
+    R = np.asarray([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]]) ## rotate clockwise
+    newV = np.dot(np.asarray(vertices)-center, R.T) + center
+    vertices = newV.flatten().tolist()
+    
+    obj.size = size # update obj size
+    obj.angle = angle
+
+    draw.polygon(vertices, fill = fill)
+    return obj
+
+## 
+def drawImage_swarm_focus(result, size=[300,300], nsub=10, min_dist=40, baseSize=20, sizerange=10, negative=False, debug=False, partial=None, away=None, rotate=None, few=0):
+    ## one random focus point
+    padding = baseSize #10
+    focus = np.array([nprandom.randint(padding,size[0]-padding), nprandom.randint(padding,size[1]-padding)])
+    # pdb.set_trace()
+    componentList = []
+    im = Image.new('L', size)
+    W, H = size
+    turn = [False]*nsub
+    otherfixed = False
+    if negative:
+        if few > 0:
+            idx = range(nsub)
+            nprandom.shuffle(idx)
+            for k in range(few):
+                turn[idx[k]] = True
+            otherfixed = True
+        #pdb.set_trace()
+    for i in range(nsub):
+        obj = None
+        while obj is None:
+            center = np.array([nprandom.randint(padding,size[0]-padding), nprandom.randint(padding,size[1]-padding)])
+            if np.linalg.norm(focus-center) < min_dist:
+                continue
+            
+            obj = drawTriangle2(im, componentList, center, nprandom.randint(baseSize,baseSize+sizerange), nprandom.randint(128,255), focus=focus, negative=negative, partial=partial, away=away, rotate=rotate, turn=turn[i], otherfixed=otherfixed)
+            if obj is not None:
+                componentList.append(obj)
+                
+    ## debug: draw focus point
+    if debug:
+        obj = drawEllipse(im, componentList, focus, 6, fill=255)
+        componentList.append(obj)
+        # draw = ImageDraw.Draw(im)
+        # draw.point(np.array([focus, focus+np.array([0,1]), focus+np.array([1,0]), focus+np.array([0,-1]), focus+np.array([-1,0])]).flatten().tolist(), fill = 255)
+    else:
+        obj = drawEllipse(im, componentList, focus, 1, fill=0)
+        componentList.append(obj)
+    
+    im.save(result, "PNG")
+    return componentList
+    
+## focus
+def generate_swarm_1(rpath, size=[300,300], nsample=2000, debug=False, min_dist=40):
+    if os.path.exists(rpath):
+        shutil.rmtree(rpath)
+    os.makedirs(rpath)
+    
+    for subset in ['train', 'valid', 'test']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+
+## focus: deliberate test, object is farther from the target
+def generate_swarm_1_far(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    subset = 'far_'+str(min_dist)
+    componentList1 = []
+    componentList2 = []
+    subpath = os.path.join(rpath, subset)
+    os.mkdir(subpath)
+    path0 = os.path.join(subpath, '0')
+    path1 = os.path.join(subpath, '1')
+    os.mkdir(path0)
+    os.mkdir(path1)
+    # class 0
+    for isample in range(nsample):
+        nTri = nprandom.randint(10,18)
+        
+        componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+        
+    # class 1
+    for isample in range(nsample):
+        nTri = nprandom.randint(10,18)
+        componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, debug=debug) )
+        
+    # pack images to training datafile
+    packImages(subpath, os.path.join(rpath, subset+'.data'))
+    np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+
+def generate_swarm_1_far_1(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    subset = 'far_sparse'+str(min_dist)
+    componentList1 = []
+    componentList2 = []
+    subpath = os.path.join(rpath, subset)
+    os.mkdir(subpath)
+    path0 = os.path.join(subpath, '0')
+    path1 = os.path.join(subpath, '1')
+    os.mkdir(path0)
+    os.mkdir(path1)
+    # class 0
+    for isample in range(nsample):
+        # nTri = nprandom.randint(10,18)
+        nTri = nprandom.randint(5,8)
+        
+        componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+        
+    # class 1
+    for isample in range(nsample):
+        # nTri = nprandom.randint(10,18)
+        nTri = nprandom.randint(5,8)
+        componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, debug=debug) )
+        
+    # pack images to training datafile
+    packImages(subpath, os.path.join(rpath, subset+'.data'))
+    np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+    
+
+## focus: deliberate test, object is farther from the target
+def generate_swarm_1_far_2(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    subset = 'far_dense'+str(min_dist)
+    componentList1 = []
+    componentList2 = []
+    subpath = os.path.join(rpath, subset)
+    os.mkdir(subpath)
+    path0 = os.path.join(subpath, '0')
+    path1 = os.path.join(subpath, '1')
+    os.mkdir(path0)
+    os.mkdir(path1)
+    # class 0
+    for isample in range(nsample):
+        # nTri = nprandom.randint(10,18)
+        nTri = nprandom.randint(30,35)
+        
+        componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+        
+    # class 1
+    for isample in range(nsample):
+        # nTri = nprandom.randint(10,18)
+        nTri = nprandom.randint(30,35)
+        componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, debug=debug) )
+        
+    # pack images to training datafile
+    packImages(subpath, os.path.join(rpath, subset+'.data'))
+    np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+    
+def generate_swarm_1_far_3(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    subset = 'far_sparse'+str(min_dist)
+    componentList1 = []
+    componentList2 = []
+    subpath = os.path.join(rpath, subset)
+    os.mkdir(subpath)
+    path0 = os.path.join(subpath, '0')
+    path1 = os.path.join(subpath, '1')
+    os.mkdir(path0)
+    os.mkdir(path1)
+    # class 0
+    for isample in range(nsample):
+        # nTri = nprandom.randint(10,18)
+        nTri = 2#nprandom.randint(5,8)
+        
+        componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+        
+    # class 1
+    for isample in range(nsample):
+        # nTri = nprandom.randint(10,18)
+        nTri = 2#nprandom.randint(5,8)
+        componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, few=2, debug=debug) )
+        
+    # pack images to training datafile
+    packImages(subpath, os.path.join(rpath, subset+'.data'))
+    np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+    
+    
+def generate_swarm_1_large(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80, baseSize=40):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['large']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(8,14)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=baseSize, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(8,14)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=baseSize, sizerange=10, negative=True, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+
+## random fishes turn away from target
+def generate_swarm_1_partial_focus(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80, partial=0.5):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['partial']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, partial=partial, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## far-away fishes turn away from target
+def generate_swarm_1_partial_focus_2(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80, away=160):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['away']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, away=away, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## only one or two objects not focusing in negative samples
+def generate_swarm_1_partial_focus_3(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['few_train', 'few_valid']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            fewturn = nprandom.randint(1, 3)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, few=fewturn, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## only three or four objects not focusing in negative samples
+def generate_swarm_1_partial_focus_4(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['few3']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            fewturn = nprandom.randint(3, 5)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, few=fewturn, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+        
+## only one or two objects not focusing in negative samples
+def generate_swarm_1_partial_focus_5(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['few_sparse_test']: #['few_sparse_train', 'few_sparse_valid']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(5,8)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(5,8)
+            fewturn = nprandom.randint(1, 3)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, few=1, debug=debug) ) #few=fewturn
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+        
+## only one or two objects not focusing in negative samples
+def generate_swarm_1_partial_focus_6(rpath, size=[300,300], nsample=2000, debug=False, min_dist=60):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['few_dense_test']:#['few_dense_train', 'few_dense_valid']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(30,35)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(30,35)
+            fewturn = nprandom.randint(1, 3)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, few=1, debug=debug) ) # few=fewturn
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## learning curve hold-out test set
+def generate_swarm_1_partial_focus_7(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in 'few_sparse_test2': #['few_sparse_train2', 'few_sparse_valid2']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = 2#nprandom.randint(5,8)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = 2#nprandom.randint(5,8)
+            fewturn = 1#nprandom.randint(1, 3)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, few=fewturn, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+def generate_swarm_1_partial_focus_8(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['few_sparse_large_test2']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = 2#nprandom.randint(5,8)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=40, sizerange=20, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = 2#nprandom.randint(5,8)
+            fewturn = 1#nprandom.randint(1, 3)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=40, sizerange=20, negative=True, few=fewturn, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+        
+def make_nofocus(infile, outfile, compList):
+    im = Image.open(infile)
+    W,H = im.size
+    obj = None
+    componentList = list(compList)
+    focusPtID = -1 # last one should be the focus point
+    
+    ## random pick
+    if componentList[-1].name == 'Ellipse':
+        comp = componentList[nprandom.randint(len(componentList)-1)]
+        focus = componentList[-1].center
+    else: ## no focus point recorded
+        comp = componentList[nprandom.randint(len(componentList))]
+        print('WARNING: random focus, not accurate!')
+        padding = 10
+        focus = np.array([nprandom.randint(padding,W-padding), nprandom.randint(padding,H-padding)])
+        
+    color = im.getpixel((comp.center[0], comp.center[1]))
+    obj = drawEraser2(im, comp.center, comp.size*1.2)
+    componentList.append(obj)
+    obj = drawTriangle2(im, [], comp.center, comp.size, color, focus=focus, negative=True, turn=True)
+    componentList.append(obj)
+
+    im.save(outfile, "PNG")
+    return componentList
+
+def make_focus(infile, outfile, compList):
+    im = Image.open(infile)
+    W,H = im.size
+    obj = None
+    componentList = list(compList)
+    focusPtID = -1 # last one should be the focus point
+    
+    ## random pick
+    if componentList[-1].name != 'Ellipse': ## no focus point recorded
+        print('ERROR: no focus point recorded, cannot make it focus!')
+        return None
+    
+    focus = componentList[-1].center
+    
+    for comp in componentList[:-1]:
+        angle = computeAngle(comp.center, focus)
+        if angle != comp.angle:
+            color = im.getpixel((comp.center[0], comp.center[1]))
+            obj = drawEraser2(im, comp.center, comp.size*1.2)
+            componentList.append(obj)
+            obj = drawTriangle2(im, [], comp.center, comp.size, color, focus=focus)
+            componentList.append(obj)
+    
+    im.save(outfile, "PNG")
+    return componentList
+    
+
+## change positive sample of train to negative by rotate one fish
+## change negative sample of few_valid to positive by focusing all
+def generate_swarm_1_deliberate(rpath, posData, negData):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['deliberate']:
+        
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        
+        [oldcomp1, oldcomp2] = np.load(posData+'_component.npy')
+        old_path0 = os.path.join(posData, '0')
+        
+        # class 0 -> class 1
+        for isample in range(len(os.listdir(old_path0))):
+            componentList1.append( make_nofocus(os.path.join(old_path0, str(isample)+'.png'), os.path.join(path1, str(isample)+'.png'), compList=oldcomp1[isample]) )
+            
+        
+        [oldcomp1, oldcomp2] = np.load(negData+'_component.npy')
+        old_path1 = os.path.join(negData, '1')
+        # class 1 -> class 0
+        for isample in range(len(os.listdir(old_path1))):
+            nTri = nprandom.randint(30,35)
+            # fewturn = nprandom.randint(1, 3)
+            componentList2.append( make_focus(os.path.join(old_path1, str(isample)+'.png'), os.path.join(path0, str(isample)+'.png'), compList=oldcomp2[isample]) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## all fishes turn around with same amount
+def generate_swarm_1_rotate_1(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80, rotate=180):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['rotate1']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, rotate=rotate, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## all fishes turn around with same amount
+def generate_swarm_1_rotate_2(rpath, size=[300,300], nsample=2000, debug=False, min_dist=80):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['rotate2']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(10,18)
+            rotate=nprandom.randint(45, 360-45)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, rotate=rotate, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## all fishes turn around with same amount
+def generate_swarm_1_rotate_3(rpath, size=[300,300], nsample=2000, debug=False, min_dist=60):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['rotate2_dense']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(30,35)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(30,35)
+            rotate=nprandom.randint(45, 360-45)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, rotate=rotate, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+def generate_swarm_1_rotate_4(rpath, size=[300,300], nsample=2000, debug=False, min_dist=60):
+    if not os.path.exists(rpath):
+        os.makedirs(rpath)
+    
+    for subset in ['rotate2_sparse']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            nTri = nprandom.randint(5,8)
+            
+            componentList1.append( drawImage_swarm_focus(os.path.join(path0, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            nTri = nprandom.randint(5,8)
+            rotate=nprandom.randint(45, 360-45)
+            componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), size=size, nsub=nTri, min_dist=min_dist, baseSize=20, sizerange=10, negative=True, rotate=rotate, debug=debug) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+## draw thread
+def drawImage_swarm_thread(result, size=[300,300], min_dist=40, baseSize=20, sizerange=10, negative=False, debug=False):
+    ## one random focus point
+    padding = max(20, baseSize/2.)
+    
+    ## various curves
+    choice = nprandom.rand()
+    if choice < 0.25:
+        # straight line
+        x0 = nprandom.randint(padding,size[0]-padding)
+        y0 = nprandom.randint(padding,size[1]-padding)
+        x1 = nprandom.randint(padding,size[0]-padding)
+        y1 = nprandom.randint(padding,size[1]-padding)
+        if x0 == x1:
+            x = np.asarray([x0]*101)
+            y = np.arange(101)*size[1]/100.0
+        else:
+            slope = (y1-y0)/(x1-x0)
+            if abs(slope)> 1:
+                p1 = [x0-(x1-x0)*y0/(y1-y0), 0]
+                p2 = [x0+(x1-x0)*(size[1]-y0)/(y1-y0), size[1]]
+            else:
+                p1 = [0, y0-(y1-y0)*x0/(x1-x0)]
+                p2 = [size[0], y0+(y1-y0)*(size[0]-x0)/(x1-x0)]
+            t = np.arange(101)/100.0
+            x = p1[0] + (p2[0]-p1[0])*t
+            y = p1[1] + (p2[1]-p1[1])*t
+        x = x.reshape((len(x),1))
+        y = y.reshape((len(y),1))
+        thread = np.concatenate((x,y), axis=1)
+        
+    elif choice < 0.5:
+        # 2nd order curve: y = (x-a)^2+b
+        # pdb.set_trace()
+        a = nprandom.uniform(padding, size[0]-padding)
+        b = nprandom.uniform(padding, size[1]/3)
+        s = nprandom.uniform(0.01, 0.1)
+        x = []
+        y = []
+        for tx in range(size[0]):
+            ty = s*(tx-a)**2 + b
+            if ty < size[1] and ty >= 0:
+                x.append(tx)
+                y.append(ty)
+        
+        x = np.asarray(x)
+        y = np.asarray(y)
+        if nprandom.rand() < 0.5:
+            y = size[1]-y
+        if nprandom.rand() < 0.5:
+            x,y = y,x
+        x = x.reshape((len(x),1))
+        y = y.reshape((len(y),1))
+        thread = np.concatenate((x,y), axis=1)
+        
+    elif choice < 0.75:
+        # sin
+        t = np.arange(101)/100.0
+        x = t*size[0]
+        scale = nprandom.randint(20, size[1]/2)
+        y = scale * np.sin(np.pi * t * 2)
+        if nprandom.rand() < 0.5:
+            y *= -1
+        if nprandom.rand() < 0.5:
+            x = x[::-1]
+            y = y[::-1]
+        y += size[1]/2
+        if nprandom.rand() < 0.5:
+            x,y = y,x
+        x = x.reshape((len(x),1))
+        y = y.reshape((len(y),1))
+        thread = np.concatenate((x,y), axis=1)
+        
+    else:
+        # ellipse
+        # pdb.set_trace()
+        cx = nprandom.randint(size[0]/3,2*size[0]/3)
+        cy = nprandom.randint(size[1]/3,2*size[1]/3)
+        ts = np.arange(101)/50.0 - 1.0
+        a = nprandom.randint(size[0]/6, size[0]/3)
+        b = nprandom.randint(size[1]/6, size[1]/3)
+        x = ts * a
+        y = float(b) * np.sqrt(a**2 - x**2) / float(a)
+        x = np.concatenate((x, x[::-1]))
+        y = np.concatenate((y, -1*y[::-1]))
+        if nprandom.rand() < 0.5:
+            x = x[::-1]
+            y = y[::-1]
+        x += cx
+        y += cy
+        x = x.reshape((len(x),1))
+        y = y.reshape((len(y),1))
+        thread = np.concatenate((x,y), axis=1)
+        
+        ## bezier
+        # x = nprandom.uniform(padding,size[0]-padding,size=[10,1])
+        # y = nprandom.uniform(padding,size[1]-padding,size=[10,1])
+        # ts = [t/100.0 for t in range(101)]
+        # points = np.concatenate((x,y),axis=1)
+        # bezier = make_bezier(points)
+        # thread = np.asarray(bezier(ts))
+    
+    
+    # pdb.set_trace()
+    componentList = []
+    im = Image.new('L', size)
+    W, H = size
+    
+    focus = np.array(thread[0])
+    for i in range(1, len(thread)):
+        center = np.array(thread[i])
+        if min(center) < baseSize/2. or min(size[0]-center[0], size[1]-center[1])<baseSize/2. or np.linalg.norm(focus-center) < min_dist:
+            continue
+        obj = None
+        
+        obj = drawTriangle2(im, componentList, center, nprandom.randint(baseSize,baseSize+sizerange), nprandom.randint(128,255), focus=focus, negative=negative)
+        if obj is not None:
+            componentList.append(obj)
+            focus = center
+            
+    ## debug: draw focus point
+    if debug:
+        draw = ImageDraw.Draw(im)
+        draw.point(thread.flatten().tolist(), fill = 255)
+    
+    im.save(result, "PNG")
+    return componentList
+    
+def generate_swarm_2(rpath, size=[300,300], nsample=2000, debug=False):
+    if os.path.exists(rpath):
+        shutil.rmtree(rpath)
+    os.makedirs(rpath)
+    
+    for subset in ['train', 'valid', 'test']:
+        componentList1 = []
+        componentList2 = []
+        subpath = os.path.join(rpath, subset)
+        os.mkdir(subpath)
+        path0 = os.path.join(subpath, '0')
+        path1 = os.path.join(subpath, '1')
+        os.mkdir(path0)
+        os.mkdir(path1)
+        # class 0
+        for isample in range(nsample):
+            
+            componentList1.append( drawImage_swarm_thread(os.path.join(path0, str(isample)+'.png'), size=size, min_dist=40, baseSize=20, sizerange=10, debug=debug) )
+            
+        # class 1
+        for isample in range(nsample):
+            if nprandom.rand() < 0.8:
+                componentList2.append( drawImage_swarm_thread(os.path.join(path1, str(isample)+'.png'), size=size, min_dist=40, baseSize=20, sizerange=10, negative=True, debug=debug) )
+            else:
+                nTri = nprandom.randint(10,18)
+                componentList2.append( drawImage_swarm_focus(os.path.join(path1, str(isample)+'.png'), nsub=nTri, size=size, min_dist=40, baseSize=20, sizerange=10, negative=True, debug=False) )
+            
+        # pack images to training datafile
+        packImages(subpath, os.path.join(rpath, subset+'.data'))
+        np.save(os.path.join(rpath, subset+'_component.npy'), [componentList1, componentList2])
+        
+        
